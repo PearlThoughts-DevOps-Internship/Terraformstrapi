@@ -1,73 +1,91 @@
-provider "aws" {
-  region = "us-west-1" # specify your region
+data "aws_availability_zones" "available" {}
+
+resource "aws_vpc" "strapi_vpc" {
+  cidr_block = "10.0.0.0/16"
+
+  tags = {
+    Name = "strapi-vpc"
+  }
+}
+
+resource "aws_subnet" "strapi_subnet" {
+  count             = 2
+  vpc_id            = aws_vpc.strapi_vpc.id
+  cidr_block        = "10.0.${count.index}.0/24"
+  availability_zone = element(data.aws_availability_zones.available.names, count.index)
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "strapi-subnet-${count.index}"
+  }
 }
 
 resource "aws_security_group" "strapi_sg" {
-  name        = "strapi_sg12"
-  description = "Allow HTTP, HTTPS, and Strapi ports"
+  name        = "ec2-SG-strapi"
+  description = "Strapi"
 
-  ingress {
-    description = "HTTP"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+  vpc_id = aws_vpc.strapi_vpc.id 
 
+  // Inbound rules (ingress)
   ingress {
-    description = "HTTPS"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "Strapi"
+    description = "Allow HTTP inbound traffic"
     from_port   = 1337
     to_port     = 1337
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = ["0.0.0.0/0"] 
   }
 
+  ingress {
+    description = "Allow SSH inbound traffic"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] 
+  }
+    // Outbound rules (egress)
   egress {
+    description = "Allow all outbound traffic"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = ["0.0.0.0/0"] 
   }
 }
+
 
 resource "aws_instance" "strapi" {
-  ami           = "ami-08012c0a9ee8e21c4" # specify your desired AMI
-  instance_type = "t2.micro"              # specify your desired instance type
-
-  security_groups = [aws_security_group.strapi_sg.name]
+  ami                         = "ami-09040d770ffe2224f"
+  instance_type               = "t2.medium"
+  subnet_id              = aws_subnet.strapi_subnet[count.index].id
+  vpc_security_group_ids = [aws_security_group.strapi_sg.id]
+  key_name = "strapi_key2"
+  associate_public_ip_address = true
+  user_data                   = <<-EOF
+                                #!/bin/bash
+                                sudo apt update
+                                curl -fsSL https://deb.nodesource.com/setup_20.x -o nodesource_setup.sh
+                                sudo bash -E nodesource_setup.sh
+                                sudo apt update && sudo apt install nodejs -y
+                                sudo npm install -g yarn && sudo npm install -g pm2
+                                echo -e "skip\n" | npx create-strapi-app simple-strapi --quickstart
+                                cd simple-strapi
+                                echo "const strapi = require('@strapi/strapi');
+                                strapi().start();" > server.js
+                                pm2 start server.js --name strapi
+                                pm2 save && pm2 startup
+                                sleep 360
+                                EOF
 
   tags = {
-    Name = "StrapiServer"
+    Name = "Strapi_Server"
   }
-
-  user_data = <<-EOF
-              #!/bin/bash
-              sudo apt-get update -y
-              sudo apt-get install -y nodejs npm git
-              sudo npm install -g pm2
-              sudo mkdir -p /srv/strapi
-              cd /srv/strapi
-              sudo git clone https://github.com/strapi/strapi.git .
-              sudo npm install
-              pm2 start npm --name "strapi" -- start
-              EOF
-
-  key_name = var.key_name
 }
 
-variable "key_name" {
-  description = "The name of the key pair to use for the instance"
-  type        = string
-}
+ 
 
-output "instance_public_ip" {
+
+output "instance_ip" {
   value = aws_instance.strapi.public_ip
 }
+
+ 
